@@ -10,7 +10,25 @@
 
 #include <time.h>
 
+extern "C" {
+#include "user_interface.h" // this is for the RTC memory read/write functions
+}
+
+typedef struct {
+  byte markerFlag;
+  byte counter;
+  unsigned long sleepTime;
+} rtcStore __attribute__((aligned(4))); // not sure if the aligned stuff is necessary, some posts suggest it is for RTC memory?
+
+rtcStore rtcMem;
+
 void setup() {
+  wifi_station_disconnect();
+  wifi_set_opmode(NULL_MODE);
+  wifi_set_sleep_type(MODEM_SLEEP_T);
+  wifi_fpm_open();
+  wifi_fpm_do_sleep(0xFFFFFFF);
+
   Serial.setDebugOutput(true);
   Serial.begin(115200);
   delay(100);
@@ -27,6 +45,23 @@ void setup() {
     time_t now = time(nullptr);
     if (!now) {
       Serial.println("We have no time");
+
+      /*
+        Serial.println("deep sleep fix");
+        wifi_fpm_do_wakeup();
+        wifi_fpm_close();
+
+        wifi_set_opmode(STATION_MODE);
+        wifi_station_connect();
+        delay(1);
+      */
+      Serial.println("deep sleep fix");
+      wifi_fpm_do_wakeup();
+      wifi_fpm_close();
+
+      Serial.println("Reconnecting");
+      //wifi_set_opmode(STATION_MODE);
+      //wifi_station_connect();
 
       WiFiManager wifi;
       if (!wifi.autoConnect("Cashula")) {
@@ -45,11 +80,20 @@ void setup() {
 
   } else {
     Serial.println("Enter config");
+    Serial.println("deep sleep fix");
+    wifi_fpm_do_wakeup();
+    wifi_fpm_close();
+
+    Serial.println("Reconnecting");
+    //wifi_set_opmode(STATION_MODE);
+    //wifi_station_connect();
 
     WiFiManager wifi;
+    wifi.setTimeout(60);
     if (!wifi.autoConnect("Cashula")) {
       delay(1000);
-      ESP.reset();
+      //ESP.reset();
+      ESP.deepSleep(1000 * 1000 * 30, WAKE_RF_DEFAULT);
     }
 
     ArduinoOTA.onStart([]() {
@@ -76,7 +120,7 @@ void setup() {
     return;
   }
   Serial.println("go to sleep");
-  ESP.deepSleep(1000 * 1000 * 30);
+  ESP.deepSleep(1000 * 1000 * 30, WAKE_RF_DEFAULT);
   delay(1000);
 }
 
