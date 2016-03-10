@@ -55,6 +55,7 @@ const int CS = 2;
 boolean arducamEnabled = false;
 
 ArduCAM arduCAM(OV2640, CS);
+ESP8266WebServer server(80);
 
 //holds the current upload
 File fsUploadFile;
@@ -119,11 +120,60 @@ void arduCAMSaveToFile(char *fileName) {
   Serial.println("CAM Save Done!");
 }
 
+void arduCAMSaveToFileAndHTTP() {
+  int total_time = millis();
+  WiFiClient client = server.client();
+
+  size_t len = arduCAM.read_fifo_length();
+  if (len >= 393216) {
+    Serial.println("Over size.");
+    return;
+  } else if (len == 0 ) {
+    Serial.println("Size is 0.");
+    return;
+  }
+
+  arduCAM.CS_LOW();
+  arduCAM.set_fifo_burst();
+  SPI.transfer(0xFF);
+
+  File f = SPIFFS.open("/capture.jpg", "w");
+
+
+  if (!client.connected()) return;
+  String response = "HTTP/1.1 200 OK\r\n";
+  response += "Content-Type: image/jpeg\r\n";
+  response += "Content-Length: " + String(len) + "\r\n\r\n";
+  server.sendContent(response);
+
+  static const size_t bufferSize = 2048;
+  static uint8_t buffer[bufferSize] = {0xFF};
+
+  while (len) {
+    size_t will_copy = (len < bufferSize) ? len : bufferSize;
+    SPI.transferBytes(&buffer[0], &buffer[0], will_copy);
+    if (!client.connected()) break;
+    client.write(&buffer[0], will_copy);
+    f.write(&buffer[0], will_copy);
+    len -= will_copy;
+  }
+
+  arduCAM.CS_HIGH();
+  f.close();
+
+  total_time = millis() - total_time;
+  Serial.print("save total_time used (in miliseconds):");
+  Serial.println(total_time, DEC);
+  Serial.println("CAM Save Done!");
+}
+
+
+
 boolean initArduCAM() {
   uint8_t vid, pid;
   uint8_t temp;
 
-  if(arducamEnabled) {
+  if (arducamEnabled) {
     return true;
   }
 
@@ -184,46 +234,54 @@ boolean captureToFile(char *fileName) {
 
   return true;
 }
-/////////////////////
 
-ESP8266WebServer server(80);
+/*********************************
+   HTTP ARDUCAM REQUEST HANDLERS
+ ********************************/
 
-
-void serverStream(){
+void httpCaptureRequest() {
   initArduCAM();
-  
+  start_capture();
+  arduCAMCapture();
+  arduCAMSaveToFileAndHTTP();
+}
+
+
+void httpStreamRequest() {
+  initArduCAM();
+
   WiFiClient client = server.client();
-  
+
   String response = "HTTP/1.1 200 OK\r\n";
   response += "Content-Type: multipart/x-mixed-replace; boundary=frame\r\n\r\n";
   server.sendContent(response);
-  
-  while (1){
+
+  while (1) {
     start_capture();
-    Serial.println("start stream");
+    //Serial.println("start stream");
     while (!arduCAM.get_bit(ARDUCHIP_TRIG, CAP_DONE_MASK));
-    
+
     size_t len = arduCAM.read_fifo_length();
-    if (len >= 393216){
+    if (len >= 393216) {
       Serial.println("Over size.");
       continue;
-    }else if (len == 0 ){
+    } else if (len == 0 ) {
       Serial.println("Size is 0.");
       continue;
     }
-    
+
     arduCAM.CS_LOW();
     arduCAM.set_fifo_burst();
     SPI.transfer(0xFF);
-    
+
     if (!client.connected()) break;
     response = "--frame\r\n";
     response += "Content-Type: image/jpeg\r\n\r\n";
     server.sendContent(response);
-    
+
     static const size_t bufferSize = 2048;
     static uint8_t buffer[bufferSize] = {0xFF};
-    
+
     while (len) {
       size_t will_copy = (len < bufferSize) ? len : bufferSize;
       SPI.transferBytes(&buffer[0], &buffer[0], will_copy);
@@ -232,77 +290,15 @@ void serverStream(){
       len -= will_copy;
     }
     arduCAM.CS_HIGH();
-    
+
     if (!client.connected()) break;
   }
 }
 
 
-
-void camCapture(ArduCAM myCAM){
-  WiFiClient client = server.client();
-  
-  size_t len = myCAM.read_fifo_length();
-  if (len >= 393216){
-    Serial.println("Over size.");
-    return;
-  }else if (len == 0 ){
-    Serial.println("Size is 0.");
-    return;
-  }
-  
-  myCAM.CS_LOW();
-  myCAM.set_fifo_burst();
-  SPI.transfer(0xFF);
-
-  File f = SPIFFS.open("/capture.jpg", "w");
-
-  
-  if (!client.connected()) return;
-  String response = "HTTP/1.1 200 OK\r\n";
-  response += "Content-Type: image/jpeg\r\n";
-  response += "Content-Length: " + String(len) + "\r\n\r\n";
-  server.sendContent(response);
-  
-  static const size_t bufferSize = 2048;
-  static uint8_t buffer[bufferSize] = {0xFF};
-  
-  while (len) {
-      size_t will_copy = (len < bufferSize) ? len : bufferSize;
-      SPI.transferBytes(&buffer[0], &buffer[0], will_copy);
-      if (!client.connected()) break;
-      client.write(&buffer[0], will_copy);
-      f.write(&buffer[0], will_copy);
-      len -= will_copy;
-  }
-  
-  myCAM.CS_HIGH();
-  f.close();
-}
-
-
-void serverCapture(){
-  initArduCAM();
-  
-  start_capture();
-  Serial.println("CAM Capturing");
-
-  int total_time = 0;
-
-  arduCAMCapture();
-  
-  Serial.println("CAM Capture Done!");
-  total_time = millis();
-  camCapture(arduCAM);
-  total_time = millis() - total_time;
-  Serial.print("send total_time used (in miliseconds):");
-  Serial.println(total_time, DEC);
-  Serial.println("CAM send Done!");
-}
-
-////////////////////
-
-
+/*********************************
+          HTTP INTERFACE
+ ********************************/
 
 //format bytes
 String formatBytes(size_t bytes) {
@@ -447,7 +443,9 @@ void handleNotFound() {
   }
 }
 
-///////////////////
+/*********************************
+         RTC & SCHEDULING
+ ********************************/
 
 void printRTCMem() {
   Serial.println("RTC Mem");
@@ -529,6 +527,9 @@ void gotoSleep() {
   delay(100);
 }
 
+/*********************************
+          SETUP AND LOOP
+ ********************************/
 
 void setup() {
   wifi_station_disconnect();
@@ -569,8 +570,8 @@ void setup() {
 
   int a = analogRead(A0);
   Serial.println(a);
-  if (a < 512 ) {
-  //if (a > 512 ) {
+  //if (a < 512 ) {
+  if (a > 512 ) {
     // **NORMAL MODE** //
 
     Serial.println("** Normal start");
@@ -611,7 +612,7 @@ void setup() {
       rtcMem.driftCalibration += ((drift * 1000) / CALIBRATION_CYCLES);
       printRTCMem();
     }
-    Serial.println(ctime(&now));
+    //Serial.println(ctime(&now));
     //Serial.println(now);
 
     if (rtcMem.execute) {
@@ -628,10 +629,11 @@ void setup() {
     }
 
 
-
     Serial.println();
     Serial.println("go to sleep");
     gotoSleep();
+
+
   } else {
     // **CONFIG MODE** //
 
@@ -691,9 +693,9 @@ void setup() {
     //SERVER INIT
 
     // Start the server
-    server.on("/capture", HTTP_GET, serverCapture);
-    server.on("/stream", HTTP_GET, serverStream);
-    //server.onNotFound(handleNotFound);
+    server.on("/capture", HTTP_GET, httpCaptureRequest);
+    server.on("/stream", HTTP_GET, httpStreamRequest);
+
     server.onNotFound([]() {
       if (!handleFileRead(server.uri()))
         handleNotFound();
@@ -703,7 +705,7 @@ void setup() {
     server.on("/list", HTTP_GET, handleFileList);
     //load editor
     server.on("/edit", HTTP_GET, []() {
-      if (!handleFileRead("/edit.htm")) server.send(404, "text/plain", "FileNotFound");
+      if (!handleFileRead("/index.htm")) server.send(404, "text/plain", "FileNotFound");
     });
     //create file
     server.on("/edit", HTTP_PUT, handleFileCreate);
@@ -729,16 +731,13 @@ void setup() {
     Serial.println("HTTP server started");
 
 
-
-
-
-
     return;
   }
 
 }
 
 void loop() {
+  //we only get here in config mode
   ArduinoOTA.handle();
   server.handleClient();
 }
