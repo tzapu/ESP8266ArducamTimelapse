@@ -180,7 +180,9 @@ boolean initArduCAM() {
   if (arducamEnabled) {
     return true;
   }
-
+  pinMode(15, OUTPUT);
+  digitalWrite(15, HIGH);
+  delay(100);
   Wire.begin();
 
   Serial.println("ArduCAM Start!");
