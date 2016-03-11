@@ -17,6 +17,8 @@
 #include <SPI.h>
 #include <memorysaver.h>
 
+#include <ESP8266FtpServer.h>
+
 extern "C" {
 #include "user_interface.h" // this is for the RTC memory read/write functions
 }
@@ -36,11 +38,11 @@ rtcStore rtcMem;
 #define DRIFT_CALIBRATION 200
 #define CALIBRATION_CYCLES 5
 
-#define MAX_SLEEP_INTERVAL_US (1000 * 1000 * 60 * 1)
+#define MAX_SLEEP_INTERVAL_US (1000 * 1000 * 60 * 30)
 
 #define AT(h, m) (60 * m + 60 * 60 * h)
 
-int schedule[] = {AT(0, 01), AT(0, 20), AT(22, 21), AT(23, 55)};
+int schedule[] = {AT(0, 01), AT(5, 30), AT(6, 55), AT(8, 03), AT(9, 30), AT(12, 23), AT(15, 00), AT(17, 30)};
 
 time_t currentTimestamp;
 
@@ -56,6 +58,8 @@ boolean arducamEnabled = false;
 
 ArduCAM arduCAM(OV2640, CS);
 ESP8266WebServer server(80);
+FtpServer ftpSrv;   //set #define FTP_DEBUG in ESP8266FtpServer.h to see ftp verbose on serial
+
 
 //holds the current upload
 File fsUploadFile;
@@ -214,7 +218,7 @@ boolean initArduCAM() {
   //arduCAM.OV2640_set_JPEG_size(OV2640_320x240);
   arduCAM.clear_fifo_flag();
   arduCAM.write_reg(ARDUCHIP_FRAMES, 0x00);
-  delay(1000);
+  delay(1600);
   Serial.println("ArduCam initialised");
   arducamEnabled = true;
   return true;
@@ -620,7 +624,7 @@ void setup() {
       //take picture
       char fileName[50];
       struct tm * localTime = localtime(&now);
-      sprintf(fileName, "/%d.%02d.%02d_%d%02d.jpg", localTime->tm_year + 1900, localTime->tm_mon + 1, localTime->tm_mday + 1, localTime->tm_hour, localTime->tm_min);
+      sprintf(fileName, "/%d.%02d.%02d_%02d%02d.jpg", localTime->tm_year + 1900, localTime->tm_mon + 1, localTime->tm_mday + 1, localTime->tm_hour, localTime->tm_min);
       Serial.println(fileName);
 
       if (!captureToFile(fileName)) {
@@ -686,9 +690,10 @@ void setup() {
 
     //start browsing pics/and capture portal
     //SPIFFS.format();
-    SPIFFS.begin();
-    Serial.println("FS started");
-
+    if (SPIFFS.begin()) {
+      Serial.println("SPIFFS opened!");
+      ftpSrv.begin("esp8266", "esp8266");   //username, password for ftp.  set ports in ESP8266FtpServer.h  (default 21, 50009 for PASV)
+    }
 
     //SERVER INIT
 
@@ -740,5 +745,6 @@ void loop() {
   //we only get here in config mode
   ArduinoOTA.handle();
   server.handleClient();
+  ftpSrv.handleFTP();
 }
 
