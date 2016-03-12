@@ -11,6 +11,7 @@
 #include <ArduinoOTA.h>
 
 #include <time.h>
+#include <vector>
 
 #include <Wire.h>
 #include <ArduCAM.h>
@@ -42,7 +43,12 @@ rtcStore rtcMem;
 
 #define AT(h, m) (60 * m + 60 * 60 * h)
 
-int schedule[] = {AT(0, 01), AT(5, 30), AT(6, 55), AT(8, 03), AT(9, 30), AT(12, 23), AT(15, 00), AT(17, 30)};
+//int schedule[] = {AT(12, 30), AT(12, 40), AT(13, 25), AT(14, 35), AT(15, 30), AT(16, 00), AT(17, 00), AT(18, 00)};
+//int* schedule = 0;
+//int scheduleSize = 0;
+
+//either define schedule here or at begining of sketch with helper
+std::vector<int> schedule;// = {AT(12, 30), AT(12, 40), AT(13, 25), AT(14, 35), AT(15, 30), AT(16, 00), AT(17, 00), AT(18, 00)};
 
 time_t currentTimestamp;
 
@@ -476,15 +482,19 @@ void gotoSleep() {
   int timestamp =  currentTimestamp + round(spent);
   int today = timestamp % 86400;
   int sleepFor = MAX_SLEEP_INTERVAL_US;
-  int arrCount = sizeof(schedule) / sizeof(schedule[0]);
+  int arrCount = schedule.size();//sizeof(schedule) / sizeof(schedule[0]);
   boolean foundSchedule = false;
   boolean execute = false;
+  char buffer[6];
 
   for (int i = 0; i < arrCount; i++) {
-    Serial.print(schedule[i]);
+
+
     if (schedule[i] <= today) {
-      Serial.println(" already passed");
+      //Serial.println(" passed");
     } else {
+      sprintf(buffer, "%02d:%02d ", schedule[i] / 60 / 60, (schedule[i] % (60 * 60)) / 60);
+      Serial.print(buffer);
       Serial.println(" next");
       foundSchedule = true;
       if (schedule[i] - today < (MAX_SLEEP_INTERVAL_US / 1000 / 1000)) {
@@ -533,6 +543,24 @@ void gotoSleep() {
   delay(100);
 }
 
+//start from, to, every N minutes
+void scheduleEveryNMinutes(int from, int to, int interval) {
+  //change from minutes to seconds
+  interval = interval * 60;
+  Serial.println(from);
+  Serial.println(to);
+  Serial.println(interval);
+  int count = int((to - from) / interval);
+  int tm = 0;
+  char buffer[6];
+  for (int i = 0; i < count; i++) {
+    tm = from + i * interval;
+    schedule.push_back(tm);
+    //sprintf(buffer, "Added: %02d:%02d", tm / 60 / 60, (tm % (60 * 60)) / 60);
+    //Serial.println(buffer);
+  }
+}
+
 /*********************************
           SETUP AND LOOP
  ********************************/
@@ -556,8 +584,6 @@ void setup() {
   Serial.println(ESP.getResetReason());
   //Serial.println(ESP.getResetInfo());
 
-  Serial.println(AT(0, 10));
-
   system_rtc_mem_read(65, &rtcMem, sizeof(rtcMem));
   printRTCMem();
   if (rtcMem.verification != RTC_VALIDATION) {
@@ -566,7 +592,7 @@ void setup() {
     rtcMem.sleepTime = 0;
     rtcMem.lastTimestamp = 0;
     rtcMem.driftCalibration = 200; //ms
-    //rtcMem.execute = false; //don t execute on first run
+    rtcMem.execute = false; //don t execute on first run
     rtcMem.execute = true; //execute on first run
   }
   currentTimestamp = rtcMem.lastTimestamp + rtcMem.sleepTime;
@@ -581,6 +607,13 @@ void setup() {
     // **NORMAL MODE** //
 
     Serial.println("** Normal start");
+
+    //schedule[] = {AT(12, 30), AT(12, 40), AT(13, 25), AT(14, 35), AT(15, 30), AT(16, 00), AT(17, 00), AT(18, 00)};
+    //schedule = new int [8];
+    //schedule[] = {AT(12, 30), AT(12, 40), AT(13, 25), AT(14, 35), AT(15, 30), AT(16, 00), AT(17, 00), AT(18, 00)};
+    //start, end, interval minutes
+    scheduleEveryNMinutes(AT(7, 00), AT(19, 00), 1);
+
     time_t now = currentTimestamp;
     //if no time or resync cycle
     if (!now || rtcMem.cycles % CALIBRATION_CYCLES == 0) {
@@ -625,8 +658,10 @@ void setup() {
       Serial.println("** Executing");
       //take picture
       char fileName[50];
-      struct tm * localTime = localtime(&now);
+      struct tm *localTime = localtime(&now);
       sprintf(fileName, "/%d.%02d.%02d_%02d%02d.jpg", localTime->tm_year + 1900, localTime->tm_mon + 1, localTime->tm_mday + 1, localTime->tm_hour, localTime->tm_min);
+      //strftime(fileName, 50, "%F.jpg", localTime);
+
       Serial.println(fileName);
 
       if (!captureToFile(fileName)) {
