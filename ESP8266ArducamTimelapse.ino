@@ -1,4 +1,13 @@
+//#define USE_SPIFFS
+#define USE_SD
+
+#ifdef USE_SPIFFS
 #include <FS.h>
+#endif
+
+#ifdef USE_SD
+#include <SD.h>
+#endif
 
 #include <ESP8266WiFi.h>
 
@@ -18,7 +27,9 @@
 #include <SPI.h>
 #include <memorysaver.h>
 
+#ifdef USE_SPIFFS
 #include <ESP8266FtpServer.h>
+#endif
 
 extern "C" {
 #include "user_interface.h" // this is for the RTC memory read/write functions
@@ -37,7 +48,7 @@ rtcStore rtcMem;
 
 #define RTC_VALIDATION 4579
 #define DRIFT_CALIBRATION 200
-#define CALIBRATION_CYCLES 5
+#define CALIBRATION_CYCLES 60
 
 #define MAX_SLEEP_INTERVAL_US (1000 * 1000 * 60 * 30)
 
@@ -59,13 +70,15 @@ time_t currentTimestamp;
 #define MAX_FRAME_LENGTH 64
 // set GPIO2 as the slave select :
 const int CS = 2;
+const int SD_CS = 0;
 
 boolean arducamEnabled = false;
 
 ArduCAM arduCAM(OV2640, CS);
 ESP8266WebServer server(80);
+#ifdef USE_SPIFFS
 FtpServer ftpSrv;   //set #define FTP_DEBUG in ESP8266FtpServer.h to see ftp verbose on serial
-
+#endif
 
 //holds the current upload
 File fsUploadFile;
@@ -91,6 +104,8 @@ void arduCAMCapture() {
   Serial.println("CAM Capture Done!");
 }
 
+
+#ifdef USE_SPIFFS
 void arduCAMSaveToFile(char *fileName) {
   int total_time = millis();
 
@@ -106,6 +121,7 @@ void arduCAMSaveToFile(char *fileName) {
   arduCAM.CS_LOW();
   arduCAM.set_fifo_burst();
   SPI.transfer(0xFF);
+
 
   File f = SPIFFS.open(fileName, "w");
 
@@ -129,7 +145,9 @@ void arduCAMSaveToFile(char *fileName) {
   Serial.println(total_time, DEC);
   Serial.println("CAM Save Done!");
 }
+#endif
 
+#ifdef USE_SPIFFS
 void arduCAMSaveToFileAndHTTP() {
   int total_time = millis();
   WiFiClient client = server.client();
@@ -176,8 +194,108 @@ void arduCAMSaveToFileAndHTTP() {
   Serial.println(total_time, DEC);
   Serial.println("CAM Save Done!");
 }
+#endif
 
+/*
+void arduCAMSaveToSDFile(char *fileName) {
+  int total_time = millis();
 
+  size_t len = arduCAM.read_fifo_length();
+  if (len >= 393216) {
+    Serial.println("Over size.");
+    return;
+  } else if (len == 0 ) {
+    Serial.println("Size is 0.");
+    return;
+  }
+
+  arduCAM.CS_LOW();
+  arduCAM.set_fifo_burst();
+  SPI.transfer(0xFF);
+
+  File f = SD.open(fileName, O_WRITE | O_CREAT | O_TRUNC);
+
+  static const size_t bufferSize = 2048;
+  static uint8_t buffer[bufferSize] = {0xFF};
+
+  while (len) {
+    size_t will_copy = (len < bufferSize) ? len : bufferSize;
+    SPI.transferBytes(&buffer[0], &buffer[0], will_copy);
+    //if (!client.connected()) break;
+    //client.write(&buffer[0], will_copy);
+    f.write(buffer, will_copy);
+    len -= will_copy;
+    delay(0);
+  }
+
+  arduCAM.CS_HIGH();
+  f.close();
+
+  total_time = millis() - total_time;
+  Serial.print("save total_time used (in miliseconds):");
+  Serial.println(total_time, DEC);
+  Serial.println("CAM Save Done!");
+}
+*/
+
+void arduCAMSaveToSDFile(char *fileName) {
+  int total_time = millis();
+
+  char str[8];
+  File outFile;
+  byte buf[256];
+  static int i = 0;
+  static int k = 0;
+  static int n = 0;
+  uint8_t temp, temp_last;
+  
+  outFile = SD.open(fileName, O_WRITE | O_CREAT | O_TRUNC);
+  if (! outFile)
+  {
+    Serial.println("open file failed");
+    return;
+  }
+  i = 0;
+  arduCAM.CS_LOW();
+  arduCAM.set_fifo_burst();
+  temp = SPI.transfer(0x00);
+  //
+  //Read JPEG data from FIFO
+  while ( (temp != 0xD9) | (temp_last != 0xFF))
+  {
+    temp_last = temp;
+    temp = SPI.transfer(0x00);
+
+    //Write image data to buffer if not full
+    if (i < 256)
+      buf[i++] = temp;
+    else
+    {
+      //Write 256 bytes image data to file
+      arduCAM.CS_HIGH();
+      outFile.write(buf, 256);
+      i = 0;
+      buf[i++] = temp;
+      arduCAM.CS_LOW();
+      arduCAM.set_fifo_burst();
+    }
+    delay(0);
+  }
+  //Write the remain bytes in the buffer
+  if (i > 0)
+  {
+    arduCAM.CS_HIGH();
+    outFile.write(buf, i);
+  }
+  //Close the file
+  outFile.close();
+  
+  total_time = millis() - total_time;
+  Serial.print("save total_time used (in miliseconds):");
+  Serial.println(total_time, DEC);
+  Serial.println("CAM Save Done!");
+
+}
 
 boolean initArduCAM() {
   uint8_t vid, pid;
@@ -222,7 +340,8 @@ boolean initArduCAM() {
   //Change to JPEG capture mode and initialize the OV2640 module
   arduCAM.set_format(JPEG);
   arduCAM.InitCAM();
-  arduCAM.OV2640_set_JPEG_size(OV2640_640x480);
+  arduCAM.OV2640_set_JPEG_size(OV2640_1600x1200);
+  //arduCAM.OV2640_set_JPEG_size(OV2640_640x480);
   //arduCAM.OV2640_set_JPEG_size(OV2640_320x240);
   arduCAM.clear_fifo_flag();
   arduCAM.write_reg(ARDUCHIP_FRAMES, 0x00);
@@ -238,12 +357,22 @@ boolean captureToFile(char *fileName) {
   }
 
   //SPIFFS.format();
-  SPIFFS.begin();
-  Serial.println("FS started");
+  //SPIFFS.begin();
+  //Serial.println("FS started");
+  if (!SD.begin(SD_CS))
+  {
+    //while (1);    //If failed, stop here
+    Serial.println("SD Card Error");
+  }
+  else
+  {
+    Serial.println("SD Card detected!");
+  }
 
   arduCAMCapture();
-  arduCAMSaveToFile(fileName);
 
+  //arduCAMSaveToFile(fileName);
+  arduCAMSaveToSDFile(fileName);
   return true;
 }
 
@@ -255,7 +384,10 @@ void httpCaptureRequest() {
   initArduCAM();
   start_capture();
   arduCAMCapture();
+  
+#ifdef USE_SPIFFS
   arduCAMSaveToFileAndHTTP();
+  #endif
 }
 
 
@@ -311,6 +443,8 @@ void httpStreamRequest() {
 /*********************************
           HTTP INTERFACE
  ********************************/
+
+#ifdef USE_SPIFFS
 
 //format bytes
 String formatBytes(size_t bytes) {
@@ -436,6 +570,7 @@ void handleFileList() {
   output += "]";
   server.send(200, "text/json", output);
 }
+#endif
 
 void handleNotFound() {
   String message = "Server is running!\n\n";
@@ -612,7 +747,7 @@ void setup() {
     //schedule = new int [8];
     //schedule[] = {AT(12, 30), AT(12, 40), AT(13, 25), AT(14, 35), AT(15, 30), AT(16, 00), AT(17, 00), AT(18, 00)};
     //start, end, interval minutes
-    scheduleEveryNMinutes(AT(7, 00), AT(19, 00), 1);
+    scheduleEveryNMinutes(AT(7, 00), AT(19, 00), 30);
 
     time_t now = currentTimestamp;
     //if no time or resync cycle
@@ -659,8 +794,11 @@ void setup() {
       //take picture
       char fileName[50];
       struct tm *localTime = localtime(&now);
-      sprintf(fileName, "/%d.%02d.%02d_%02d%02d.jpg", localTime->tm_year + 1900, localTime->tm_mon + 1, localTime->tm_mday + 1, localTime->tm_hour, localTime->tm_min);
-      //strftime(fileName, 50, "%F.jpg", localTime);
+
+      //long filename
+      //sprintf(fileName, "/%d.%02d.%02d_%02d%02d.jpg", localTime->tm_year + 1900, localTime->tm_mon + 1, localTime->tm_mday + 1, localTime->tm_hour, localTime->tm_min);
+      //8.3 filename
+      sprintf(fileName, "%02d%02d%02d%02d.jpg", localTime->tm_mon + 1, localTime->tm_mday + 1, localTime->tm_hour, localTime->tm_min);
 
       Serial.println(fileName);
 
@@ -727,23 +865,28 @@ void setup() {
 
     //start browsing pics/and capture portal
     //SPIFFS.format();
+#ifdef USE_SPIFFS
     if (SPIFFS.begin()) {
       Serial.println("SPIFFS opened!");
       ftpSrv.begin("esp8266", "esp8266");   //username, password for ftp.  set ports in ESP8266FtpServer.h  (default 21, 50009 for PASV)
     }
-
+#endif
     //SERVER INIT
 
     // Start the server
     server.on("/capture", HTTP_GET, httpCaptureRequest);
     server.on("/stream", HTTP_GET, httpStreamRequest);
+    server.onNotFound(handleNotFound);
 
+#ifdef USE_SPIFFS
     server.onNotFound([]() {
       if (!handleFileRead(server.uri()))
         handleNotFound();
     });
-
+#endif
     //list directory
+    
+#ifdef USE_SPIFFS
     server.on("/list", HTTP_GET, handleFileList);
     //load editor
     server.on("/edit", HTTP_GET, []() {
@@ -769,6 +912,7 @@ void setup() {
       server.send(200, "text/json", json);
       json = String();
     });
+    #endif
     server.begin();
     Serial.println("HTTP server started");
 
@@ -782,6 +926,8 @@ void loop() {
   //we only get here in config mode
   ArduinoOTA.handle();
   server.handleClient();
+#ifdef USE_SPIFFS
   ftpSrv.handleFTP();
+#endif
 }
 
