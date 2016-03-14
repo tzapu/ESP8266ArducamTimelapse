@@ -1,5 +1,6 @@
 //#define USE_SPIFFS
 #define USE_SD
+//#define USE_SDFAT
 
 #ifdef USE_SPIFFS
 #include <FS.h>
@@ -8,6 +9,14 @@
 #ifdef USE_SD
 #include <SD.h>
 #endif
+
+#ifdef USE_SDFAT
+////////////////// NOT WORKING ///////////
+#include <SdFat.h>
+SdFat sd;
+SdFile file;
+#endif
+
 
 #include <ESP8266WiFi.h>
 
@@ -242,19 +251,26 @@ void arduCAMSaveToSDFile(char *fileName) {
   int total_time = millis();
 
   char str[8];
-  File outFile;
   byte buf[256];
   static int i = 0;
   static int k = 0;
   static int n = 0;
   uint8_t temp, temp_last;
 
-  outFile = SD.open(fileName, O_WRITE | O_CREAT | O_TRUNC);
-  if (! outFile)
-  {
+#ifdef USE_SD
+  File file;
+  file = SD.open(fileName, O_WRITE | O_CREAT | O_TRUNC);
+  if (! file)  {
     Serial.println("open file failed");
     return;
   }
+#endif
+#ifdef USE_SDFAT
+  if (!file.open(fileName, O_CREAT | O_WRITE | O_TRUNC)) {
+    Serial.println("open file failed");
+    return;
+  }
+#endif
   i = 0;
   arduCAM.CS_LOW();
   arduCAM.set_fifo_burst();
@@ -273,7 +289,7 @@ void arduCAMSaveToSDFile(char *fileName) {
     {
       //Write 256 bytes image data to file
       arduCAM.CS_HIGH();
-      outFile.write(buf, 256);
+      file.write(buf, 256);
       i = 0;
       buf[i++] = temp;
       arduCAM.CS_LOW();
@@ -285,10 +301,10 @@ void arduCAMSaveToSDFile(char *fileName) {
   if (i > 0)
   {
     arduCAM.CS_HIGH();
-    outFile.write(buf, i);
+    file.write(buf, i);
   }
   //Close the file
-  outFile.close();
+  file.close();
 
   total_time = millis() - total_time;
   Serial.print("save total_time used (in miliseconds):");
@@ -360,12 +376,18 @@ boolean captureToFile(char *fileName) {
   //SPIFFS.format();
   //SPIFFS.begin();
   //Serial.println("FS started");
-  if (!SD.begin(SD_CS)) {
-    //while (1);    //If failed, stop here
-    Serial.println("SD Card Error");
-  } else {
-    Serial.println("SD Card detected!");
+
+  //if (!SD.begin(SD_CS)) {
+  //while (1);    //If failed, stop here
+  //  Serial.println("SD Card Error");
+  //} else {
+  //  Serial.println("SD Card detected!");
+  //}
+#ifdef USE_SDFAT
+  if (!sd.begin(SD_CS, SPI_HALF_SPEED)) {
+    return false;
   }
+#endif
 
   arduCAMCapture();
 
@@ -524,6 +546,19 @@ bool handleFileRead(String path) {
   }
 
   dataFile.close();
+  return true;
+#endif
+
+#ifdef USE_SDFAT
+  if (sd.exists(path.c_str())) {
+    //if (sd.exists(pathWithGz)) {
+    //  path += ".gz";
+    //}
+    file.open(path.c_str(), O_READ);
+    size_t sent = server.streamFile(file, contentType);
+    file.close();
+    return true;
+  }
   return true;
 #endif
 
@@ -857,7 +892,7 @@ void setup() {
     //Serial.println(now);
 
     //continuous shooting
-    if (true) {
+    if (false) {
       Serial.println("continuous shooting");
       //no execute -> first time run
       if (!rtcMem.execute)  {
