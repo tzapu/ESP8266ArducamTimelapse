@@ -197,7 +197,7 @@ void arduCAMSaveToFileAndHTTP() {
 #endif
 
 /*
-void arduCAMSaveToSDFile(char *fileName) {
+  void arduCAMSaveToSDFile(char *fileName) {
   int total_time = millis();
 
   size_t len = arduCAM.read_fifo_length();
@@ -235,7 +235,7 @@ void arduCAMSaveToSDFile(char *fileName) {
   Serial.print("save total_time used (in miliseconds):");
   Serial.println(total_time, DEC);
   Serial.println("CAM Save Done!");
-}
+  }
 */
 
 void arduCAMSaveToSDFile(char *fileName) {
@@ -248,7 +248,7 @@ void arduCAMSaveToSDFile(char *fileName) {
   static int k = 0;
   static int n = 0;
   uint8_t temp, temp_last;
-  
+
   outFile = SD.open(fileName, O_WRITE | O_CREAT | O_TRUNC);
   if (! outFile)
   {
@@ -289,7 +289,7 @@ void arduCAMSaveToSDFile(char *fileName) {
   }
   //Close the file
   outFile.close();
-  
+
   total_time = millis() - total_time;
   Serial.print("save total_time used (in miliseconds):");
   Serial.println(total_time, DEC);
@@ -340,7 +340,8 @@ boolean initArduCAM() {
   //Change to JPEG capture mode and initialize the OV2640 module
   arduCAM.set_format(JPEG);
   arduCAM.InitCAM();
-  arduCAM.OV2640_set_JPEG_size(OV2640_1600x1200);
+  arduCAM.OV2640_set_JPEG_size(OV2640_1280x1024);
+  //arduCAM.OV2640_set_JPEG_size(OV2640_1600x1200);
   //arduCAM.OV2640_set_JPEG_size(OV2640_640x480);
   //arduCAM.OV2640_set_JPEG_size(OV2640_320x240);
   arduCAM.clear_fifo_flag();
@@ -359,13 +360,10 @@ boolean captureToFile(char *fileName) {
   //SPIFFS.format();
   //SPIFFS.begin();
   //Serial.println("FS started");
-  if (!SD.begin(SD_CS))
-  {
+  if (!SD.begin(SD_CS)) {
     //while (1);    //If failed, stop here
     Serial.println("SD Card Error");
-  }
-  else
-  {
+  } else {
     Serial.println("SD Card detected!");
   }
 
@@ -384,10 +382,10 @@ void httpCaptureRequest() {
   initArduCAM();
   start_capture();
   arduCAMCapture();
-  
+
 #ifdef USE_SPIFFS
   arduCAMSaveToFileAndHTTP();
-  #endif
+#endif
 }
 
 
@@ -444,7 +442,6 @@ void httpStreamRequest() {
           HTTP INTERFACE
  ********************************/
 
-#ifdef USE_SPIFFS
 
 //format bytes
 String formatBytes(size_t bytes) {
@@ -481,6 +478,9 @@ bool handleFileRead(String path) {
   if (path.endsWith("/")) path += "index.htm";
   String contentType = getContentType(path);
   String pathWithGz = path + ".gz";
+
+
+#ifdef USE_SPIFFS
   if (SPIFFS.exists(pathWithGz) || SPIFFS.exists(path)) {
     if (SPIFFS.exists(pathWithGz))
       path += ".gz";
@@ -489,8 +489,48 @@ bool handleFileRead(String path) {
     file.close();
     return true;
   }
+#endif
+
+#ifdef USE_SD
+  String dataType = "text/plain";
+  if (path.endsWith("/")) path += "index.htm";
+
+  if (path.endsWith(".src")) path = path.substring(0, path.lastIndexOf("."));
+  else if (path.endsWith(".htm")) dataType = "text/html";
+  else if (path.endsWith(".css")) dataType = "text/css";
+  else if (path.endsWith(".js")) dataType = "application/javascript";
+  else if (path.endsWith(".png")) dataType = "image/png";
+  else if (path.endsWith(".gif")) dataType = "image/gif";
+  else if (path.endsWith(".jpg")) dataType = "image/jpeg";
+  else if (path.endsWith(".ico")) dataType = "image/x-icon";
+  else if (path.endsWith(".xml")) dataType = "text/xml";
+  else if (path.endsWith(".pdf")) dataType = "application/pdf";
+  else if (path.endsWith(".zip")) dataType = "application/zip";
+
+  File dataFile = SD.open(path.c_str());
+  if (dataFile.isDirectory()) {
+    path += "/index.htm";
+    dataType = "text/html";
+    dataFile = SD.open(path.c_str());
+  }
+
+  if (!dataFile)
+    return false;
+
+  if (server.hasArg("download")) dataType = "application/octet-stream";
+
+  if (server.streamFile(dataFile, dataType) != dataFile.size()) {
+    Serial.println("Sent less data than expected!");
+  }
+
+  dataFile.close();
+  return true;
+#endif
+
   return false;
 }
+
+#ifdef USE_SPIFFS
 
 void handleFileUpload() {
   if (server.uri() != "/edit") return;
@@ -543,6 +583,8 @@ void handleFileCreate() {
   path = String();
 }
 
+#endif
+
 void handleFileList() {
   if (!server.hasArg("dir")) {
     server.send(500, "text/plain", "BAD ARGS");
@@ -551,10 +593,11 @@ void handleFileList() {
 
   String path = server.arg("dir");
   Serial.println("handleFileList: " + path);
-  Dir dir = SPIFFS.openDir(path);
-  path = String();
 
   String output = "[";
+#ifdef USE_SPIFFS
+  Dir dir = SPIFFS.openDir(path);
+
   while (dir.next()) {
     File entry = dir.openFile("r");
     if (output != "[") output += ',';
@@ -566,11 +609,35 @@ void handleFileList() {
     output += "\"}";
     entry.close();
   }
+#endif
+
+#ifdef USE_SD
+  File dir = SD.open(path);
+
+  while (true) {
+    File entry = dir.openNextFile();
+    if (! entry) {
+      // no more files
+      break;
+    }
+    if (output != "[") output += ',';
+    bool isDir = false;
+    output += "{\"type\":\"";
+    output += (entry.isDirectory()) ? "dir" : "file";
+    output += "\",\"name\":\"";
+    output += String(entry.name()).substring(1);
+    output += "\"}";
+    entry.close();
+  }
+
+#endif
+  path = String();
+
 
   output += "]";
   server.send(200, "text/json", output);
 }
-#endif
+
 
 void handleNotFound() {
   String message = "Server is running!\n\n";
@@ -728,7 +795,7 @@ void setup() {
     rtcMem.lastTimestamp = 0;
     rtcMem.driftCalibration = 200; //ms
     rtcMem.execute = false; //don t execute on first run
-    rtcMem.execute = true; //execute on first run
+    //rtcMem.execute = true; //execute on first run
   }
   currentTimestamp = rtcMem.lastTimestamp + rtcMem.sleepTime;
   //printRTCMem();
@@ -789,6 +856,43 @@ void setup() {
     //Serial.println(ctime(&now));
     //Serial.println(now);
 
+    //continuous shooting
+    if (true) {
+      Serial.println("continuous shooting");
+      //no execute -> first time run
+      if (!rtcMem.execute)  {
+        rtcMem.verification = RTC_VALIDATION;
+        rtcMem.execute = true;
+        rtcMem.lastTimestamp = now;
+        rtcMem.cycles++;
+        system_rtc_mem_write(65, &rtcMem, sizeof(rtcMem));
+        Serial.println("Restarting to execute a continous loop");
+        //mark executing for next time and go to 1 µsec sleep
+        ESP.deepSleep(1, WAKE_RF_DEFAULT);
+        delay(100);
+      }
+
+      while (1) {
+        Serial.println("** Executing");
+        //take picture
+        char fileName[50];
+        now = currentTimestamp + millis() / 1000;//time(currentTimestamp);
+        struct tm *localTime = localtime(&now);
+
+        //long filename
+        //sprintf(fileName, "/%d.%02d.%02d_%02d%02d.jpg", localTime->tm_year + 1900, localTime->tm_mon + 1, localTime->tm_mday + 1, localTime->tm_hour, localTime->tm_min);
+        //8.3 filename
+        sprintf(fileName, "%02d%02d%02d%02d.jpg", localTime->tm_mday + 1, localTime->tm_hour, localTime->tm_min, localTime->tm_sec);
+
+        Serial.println(fileName);
+
+        if (!captureToFile(fileName)) {
+          Serial.println("*** Capture failed");
+        }
+        delay(500);
+      }
+    }
+
     if (rtcMem.execute) {
       Serial.println("** Executing");
       //take picture
@@ -820,6 +924,10 @@ void setup() {
     Serial.println("deep sleep fix");
     wifi_fpm_do_wakeup();
     wifi_fpm_close();
+
+    pinMode(15, OUTPUT);
+    digitalWrite(15, HIGH);
+    delay(100);
 
     Serial.println("Reconnecting");
     //wifi_set_opmode(STATION_MODE);
@@ -871,23 +979,30 @@ void setup() {
       ftpSrv.begin("esp8266", "esp8266");   //username, password for ftp.  set ports in ESP8266FtpServer.h  (default 21, 50009 for PASV)
     }
 #endif
+
+#ifdef USE_SD
+    if (!SD.begin(SD_CS)) {
+      //while (1);    //If failed, stop here
+      Serial.println("SD Card Error");
+    }
+#endif
+
     //SERVER INIT
 
     // Start the server
     server.on("/capture", HTTP_GET, httpCaptureRequest);
     server.on("/stream", HTTP_GET, httpStreamRequest);
-    server.onNotFound(handleNotFound);
+    //server.onNotFound(handleNotFound);
 
-#ifdef USE_SPIFFS
     server.onNotFound([]() {
       if (!handleFileRead(server.uri()))
         handleNotFound();
     });
-#endif
+
     //list directory
-    
-#ifdef USE_SPIFFS
     server.on("/list", HTTP_GET, handleFileList);
+
+#ifdef USE_SPIFFS
     //load editor
     server.on("/edit", HTTP_GET, []() {
       if (!handleFileRead("/index.htm")) server.send(404, "text/plain", "FileNotFound");
@@ -912,7 +1027,7 @@ void setup() {
       server.send(200, "text/json", json);
       json = String();
     });
-    #endif
+#endif
     server.begin();
     Serial.println("HTTP server started");
 
